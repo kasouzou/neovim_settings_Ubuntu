@@ -201,6 +201,7 @@ function M.setup()
         group = augroup,
         pattern = { "*.pdf", "*.PDF" },
         callback = function(event)
+            if vim.b[event.buf].pdf_external_viewer then return end
             local win = vim.api.nvim_get_current_win()
             vim.schedule(function()
                 if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == event.buf then

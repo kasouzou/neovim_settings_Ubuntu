@@ -33,7 +33,6 @@ local function notify_local_player(path)
     -- SSH_CONNECTION はリモートシェルでのみ設定されるため、ローカル
     -- 動画を開いたときには通知を送らない。
     if not vim.env.SSH_CONNECTION or vim.env.SSH_CONNECTION == "" then return end
-    if not ssh_local_mirror_enabled() then return end
     local token = tostring(vim.uv.hrtime())
     local value = REMOTE_VIDEO_HOST .. "\t" .. path .. "\t" .. token
     local sequence = string.char(27) .. "]1337;SetUserVar=CODEX_REMOTE_VIDEO=" .. base64_encode(value) .. string.char(7)
