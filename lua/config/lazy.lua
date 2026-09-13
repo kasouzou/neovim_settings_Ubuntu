@@ -101,6 +101,12 @@ keymap('n', '<A-l>', ':BufferLineMoveNext<CR>', opts)
 
 -- 【自動保存 ＆ LilyPondコンパイルの一体化設定】
 -- LilyPondは楽譜を書くためのフリーソフトです
+-- コンパイル処理の連打防止用変数と、出力バッファをグローバルに保持しておくっす
+local lilypond_job_id = nil
+local lilypond_out_buf = nil
+
+-- 【自動保存 ＆ LilyPondコンパイルの一体化設定】
+-- LilyPondは楽譜を書くためのフリーソフトです
 vim.api.nvim_create_autocmd({ "InsertLeave", "TextChanged" }, {
     pattern = "*",
     callback = function()
@@ -110,14 +116,97 @@ vim.api.nvim_create_autocmd({ "InsertLeave", "TextChanged" }, {
 
             -- 2. もし保存したファイルがLilyPond(.ly)だった場合、その直後に非同期コンパイルを実行
             if vim.fn.expand("%:e") == "ly" then
-                local file = vim.fn.expand("%")
-                vim.fn.jobstart({ "lilypond", file }, {
+                -- 編集中のファイルの階層から親ディレクトリに向かって main.ly を探索（プロジェクトルートの特定）
+                local current_file_dir = vim.fn.expand("%:p:h")
+                local main_file = vim.fs.find("main.ly", { upward = true, path = current_file_dir })[1]
+                local target_file = main_file or vim.fn.expand("%:p")
+
+                -- 前回のコンパイル処理がまだ終わっていなければキャンセル（多重実行によるフリーズ防止）
+                if lilypond_job_id then
+                    vim.fn.jobstop(lilypond_job_id)
+                end
+
+                -- リアルタイム出力用の専用バッファ（画面）を準備
+                if not lilypond_out_buf or not vim.api.nvim_buf_is_valid(lilypond_out_buf) then
+                    lilypond_out_buf = vim.api.nvim_create_buf(false, true)
+                    vim.api.nvim_buf_set_name(lilypond_out_buf, "LilyPond_Output")
+                end
+
+                -- 画面下部に10行分のスペースで分割表示（すでに表示されていれば何もしないっす）
+                local win_found = false
+                for _, win in ipairs(vim.api.nvim_list_wins()) do
+                    if vim.api.nvim_win_get_buf(win) == lilypond_out_buf then
+                        win_found = true
+                        break
+                    end
+                end
+
+                if not win_found then
+                    local cur_win = vim.api.nvim_get_current_win()
+                    vim.cmd("botright 10split")
+                    local new_win = vim.api.nvim_get_current_win()
+                    vim.api.nvim_win_set_buf(new_win, lilypond_out_buf)
+                    vim.api.nvim_set_current_win(cur_win) -- フォーカスは元のコード編集画面に戻すっす
+                end
+
+                -- コンパイル開始時にバッファの中身をリセットしてヘッダーを表示
+                vim.api.nvim_buf_set_lines(lilypond_out_buf, 0, -1, false, {
+                    "--- LilyPond コンパイル開始 ---",
+                    "Target: " .. target_file,
+                    "--------------------------------"
+                })
+
+                -- ログを行単位でバッファに追記していく関数
+                local append_log = function(_, data)
+                    if not data then return end
+
+                    local lines = {}
+                    for _, v in ipairs(data) do
+                        table.insert(lines, v)
+                    end
+
+                    -- Neovimの仕様で末尾に空文字列が必ず入るため除去
+                    if lines[#lines] == "" then
+                        table.remove(lines, #lines)
+                    end
+
+                    if #lines > 0 then
+                        local line_count = vim.api.nvim_buf_line_count(lilypond_out_buf)
+                        vim.api.nvim_buf_set_lines(lilypond_out_buf, line_count, line_count, false, lines)
+
+                        -- ウィンドウを一番下まで自動スクロール
+                        for _, win in ipairs(vim.api.nvim_list_wins()) do
+                            if vim.api.nvim_win_get_buf(win) == lilypond_out_buf then
+                                local new_count = vim.api.nvim_buf_line_count(lilypond_out_buf)
+                                vim.api.nvim_win_set_cursor(win, { new_count, 0 })
+                            end
+                        end
+                    end
+                end
+
+                -- コンパイル処理の実行（stdout_bufferedをfalseにしてリアルタイム出力）
+                lilypond_job_id = vim.fn.jobstart({ "lilypond", target_file }, {
+                    stdout_buffered = false,
+                    stderr_buffered = false,
+                    on_stdout = append_log,
+                    on_stderr = append_log,
                     on_exit = function(_, code)
                         if code == 0 then
+                            -- コンパイル成功時は出力ウィンドウを閉じるっす
+                            for _, win in ipairs(vim.api.nvim_list_wins()) do
+                                if vim.api.nvim_win_get_buf(win) == lilypond_out_buf then
+                                    vim.api.nvim_win_close(win, true)
+                                    break
+                                end
+                            end
                             vim.notify("LilyPond: コンパイル成功！", vim.log.levels.INFO)
                         else
-                            vim.notify("LilyPond: エラーが発生しました", vim.log.levels.WARN)
+                            -- エラー時はログが確認できるようにウィンドウを残すっす
+                            local line_count = vim.api.nvim_buf_line_count(lilypond_out_buf)
+                            vim.api.nvim_buf_set_lines(lilypond_out_buf, line_count, line_count, false,
+                                { "", "=== エラー終了 ===" })
                         end
+                        lilypond_job_id = nil
                     end
                 })
             end

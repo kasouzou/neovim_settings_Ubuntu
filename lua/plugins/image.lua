@@ -27,5 +27,9 @@ return {
             window_overlap_clear_enabled = false,
             pipe_path = nil,
         },
+        config = function(_, opts)
+            require("image").setup(opts)
+            require("config.pdf_preview").setup()
+        end,
     },
 }
